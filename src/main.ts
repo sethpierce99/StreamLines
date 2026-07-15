@@ -5,13 +5,17 @@ const CANVAS_WIDTH = 820;
 const CANVAS_HEIGHT = 500;
 const WORLD_HALF_WIDTH = 5.5;
 const WORLD_HALF_HEIGHT = 3.35;
-const STEP_SIZE = 0.045;
-const TRACE_STEPS = 460;
-const SEED_SPACING = 0.45;
 const GRID_SNAP = 0.25;
 const DRAG_HIT_RADIUS = 14;
 const SIDE_ANGLE_LIMIT = 80;
 const DOMAIN_MARGIN = 0.25;
+const HOVER_REVEAL_DELAY_MS = 2000;
+const STREAMLINE_STEP = 0.045;
+const STREAMLINE_MAX_STEPS = 620;
+const STREAMLINE_CANDIDATE_SPACING = 0.34;
+const STREAMLINE_SAMPLE_STRIDE = 5;
+const STREAMLINE_BASE_SPACING = 15;
+const STREAMLINE_MIN_SPACING = 5.5;
 
 type BoundarySide = "left" | "right" | "top" | "bottom";
 
@@ -43,6 +47,8 @@ const state: ViewState = {
 };
 
 let dragState: DragState | null = null;
+let hoveredFlowId: string | null = null;
+let hoverTimer: number | null = null;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -96,6 +102,7 @@ app.innerHTML = `
         <div id="side-top" class="side-control side-control-top"></div>
         <div id="side-left" class="side-control side-control-left"></div>
         <canvas id="flow-canvas" width="${CANVAS_WIDTH}" height="${CANVAS_HEIGHT}" aria-label="Canvas showing potential flow streamlines"></canvas>
+        <div id="primitive-tooltip" class="primitive-tooltip" role="status" aria-live="polite" hidden></div>
         <div id="side-right" class="side-control side-control-right"></div>
         <div id="side-bottom" class="side-control side-control-bottom"></div>
       </div>
@@ -109,6 +116,7 @@ const context = requiredCanvasContext(canvas);
 const flowList = requiredElement<HTMLDivElement>("#flow-list");
 const flowEditor = requiredElement<HTMLDivElement>("#flow-editor");
 const readout = requiredElement<HTMLDivElement>("#readout");
+const primitiveTooltip = requiredElement<HTMLDivElement>("#primitive-tooltip");
 const vectorToggle = requiredElement<HTMLInputElement>("#toggle-vectors");
 const seedToggle = requiredElement<HTMLInputElement>("#toggle-seeds");
 const resetButton = requiredElement<HTMLButtonElement>("#reset-case");
@@ -129,6 +137,13 @@ const colors = {
   vector: css.getPropertyValue("--vector").trim(),
   marker: css.getPropertyValue("--marker").trim(),
   markerStroke: css.getPropertyValue("--marker-stroke").trim(),
+};
+
+const primitiveColors: Record<Exclude<FlowKind, "uniform">, string> = {
+  source: css.getPropertyValue("--flow-source").trim(),
+  sink: css.getPropertyValue("--flow-sink").trim(),
+  doublet: css.getPropertyValue("--flow-doublet").trim(),
+  vortex: css.getPropertyValue("--flow-vortex").trim(),
 };
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -204,11 +219,13 @@ canvas.addEventListener("mousemove", (event) => {
   const velocity = velocityAtPoint(point, activeFlows());
   readout.textContent = `x ${point.x.toFixed(2)}, y ${point.y.toFixed(2)}, |V| ${magnitude(velocity).toFixed(2)}`;
   canvas.classList.toggle("is-draggable", Boolean(hoveredFlow));
+  updateHoveredFlow(hoveredFlow);
 });
 
 canvas.addEventListener("mouseleave", () => {
   readout.textContent = "x 0.00, y 0.00, |V| 0.00";
   canvas.classList.remove("is-draggable");
+  clearHoverTooltip();
 });
 
 canvas.addEventListener("pointerdown", (event) => {
@@ -220,9 +237,11 @@ canvas.addEventListener("pointerdown", (event) => {
   const flow = findFlowAtScreenPoint(point);
 
   if (!flow) {
+    clearHoverTooltip();
     return;
   }
 
+  clearHoverTooltip();
   state.selectedFlowId = flow.id;
   dragState = { flowId: flow.id };
   canvas.setPointerCapture(event.pointerId);
@@ -242,6 +261,7 @@ canvas.addEventListener("pointermove", (event) => {
   if (!flow) {
     dragState = null;
     canvas.classList.remove("is-dragging");
+    clearHoverTooltip();
     return;
   }
 
@@ -264,6 +284,7 @@ canvas.addEventListener("pointercancel", (event) => {
   dragState = null;
   canvas.releasePointerCapture(event.pointerId);
   canvas.classList.remove("is-dragging");
+  clearHoverTooltip();
 });
 
 function createFlow(kind: FlowKind): Flow {
@@ -292,6 +313,7 @@ function renderUi(): void {
   state.flows.forEach((flow) => {
     const row = document.createElement("div");
     row.className = `flow-row${flow.id === state.selectedFlowId ? " selected" : ""}`;
+    row.style.setProperty("--flow-color", flow.kind === "uniform" ? colors.marker : primitiveColor(flow));
 
     const selectButton = document.createElement("button");
     selectButton.type = "button";
@@ -342,6 +364,7 @@ function renderSideControls(): void {
 
     const angleDegrees = radiansToDegrees(sideFlow.angleOffset);
     const sideName = sideFlow.side[0].toUpperCase() + sideFlow.side.slice(1);
+    const dial = dialGeometry(sideFlow.side);
 
     container.innerHTML = `
       <label class="side-toggle">
@@ -354,11 +377,11 @@ function renderSideControls(): void {
       </label>
       <div class="side-angle" data-side-angle="${sideFlow.side}">
         <span>Angle <output>${angleDegrees.toFixed(0)} deg</output></span>
-        <svg viewBox="0 0 120 62" aria-hidden="true">
-          <path class="angle-arc-track" d="M 18 48 A 42 42 0 0 1 102 48"></path>
-          <path class="angle-arc-normal" d="M 60 48 L 60 13"></path>
-          <line class="angle-arc-ray" x1="60" y1="48" x2="60" y2="13"></line>
-          <circle class="angle-arc-handle" cx="60" cy="13" r="6"></circle>
+        <svg viewBox="0 0 120 72" aria-hidden="true">
+          <path class="angle-arc-track" d="${dial.arcPath}"></path>
+          <path class="angle-arc-flat" d="${dial.flatPath}"></path>
+          <line class="angle-arc-line" x1="${dial.center.x}" y1="${dial.center.y}" x2="${dial.center.x}" y2="${dial.center.y}"></line>
+          <circle class="angle-arc-handle" cx="${dial.center.x}" cy="${dial.center.y}" r="6"></circle>
         </svg>
       </div>
     `;
@@ -366,7 +389,7 @@ function renderSideControls(): void {
     const toggle = requiredChild<HTMLInputElement>(container, `[data-side-toggle="${sideFlow.side}"]`);
     const speed = requiredChild<HTMLInputElement>(container, `[data-side-speed="${sideFlow.side}"]`);
     const angle = requiredChild<HTMLDivElement>(container, `[data-side-angle="${sideFlow.side}"]`);
-    updateAngleArc(angle, angleDegrees);
+    updateAngleArc(angle, sideFlow.side, angleDegrees);
 
     toggle.addEventListener("change", () => {
       sideFlow.enabled = toggle.checked;
@@ -478,35 +501,122 @@ function requiredChild<T extends Element>(parent: Element, selector: string): T 
 
 function setSideAngleFromPointer(sideFlow: SideFlow, angleControl: HTMLDivElement, event: PointerEvent): void {
   const svg = requiredChild<SVGSVGElement>(angleControl, "svg");
+  const dial = dialGeometry(sideFlow.side);
   const rect = svg.getBoundingClientRect();
   const localX = ((event.clientX - rect.left) / rect.width) * 120;
-  const localY = ((event.clientY - rect.top) / rect.height) * 62;
-  const degrees = clamp(Math.atan2(localX - 60, 48 - localY) * (180 / Math.PI), -SIDE_ANGLE_LIMIT, SIDE_ANGLE_LIMIT);
+  const localY = ((event.clientY - rect.top) / rect.height) * 72;
+  const outward = normalizeVector({
+    x: localX - dial.center.x,
+    y: localY - dial.center.y,
+  });
+  const flowScreen = { x: -outward.x, y: -outward.y };
+  const flowMathAngle = Math.atan2(-flowScreen.y, flowScreen.x);
+  const degrees = clamp(
+    radiansToDegrees(normalizeAngle(flowMathAngle - sideBaseAngle(sideFlow.side))),
+    -SIDE_ANGLE_LIMIT,
+    SIDE_ANGLE_LIMIT,
+  );
 
   sideFlow.angleOffset = degreesToRadians(degrees);
-  updateAngleArc(angleControl, degrees);
+  updateAngleArc(angleControl, sideFlow.side, degrees);
 }
 
-function updateAngleArc(angleControl: HTMLDivElement, degrees: number): void {
+function updateAngleArc(angleControl: HTMLDivElement, side: BoundarySide, degrees: number): void {
   const output = requiredChild<HTMLOutputElement>(angleControl, "output");
-  const ray = requiredChild<SVGLineElement>(angleControl, ".angle-arc-ray");
+  const line = requiredChild<SVGLineElement>(angleControl, ".angle-arc-line");
   const handle = requiredChild<SVGCircleElement>(angleControl, ".angle-arc-handle");
-  const point = angleHandlePoint(degrees);
+  const dial = dialGeometry(side);
+  const flowAngle = sideBaseAngle(side) + degreesToRadians(degrees);
+  const flowScreen = { x: Math.cos(flowAngle), y: -Math.sin(flowAngle) };
+  const outward = { x: -flowScreen.x, y: -flowScreen.y };
+  const start = {
+    x: dial.center.x - outward.x * 18,
+    y: dial.center.y - outward.y * 18,
+  };
+  const point = {
+    x: dial.center.x + outward.x * dial.radius,
+    y: dial.center.y + outward.y * dial.radius,
+  };
 
   output.textContent = `${degrees.toFixed(0)} deg`;
-  ray.setAttribute("x2", point.x.toFixed(2));
-  ray.setAttribute("y2", point.y.toFixed(2));
+  line.setAttribute("x1", start.x.toFixed(2));
+  line.setAttribute("y1", start.y.toFixed(2));
+  line.setAttribute("x2", point.x.toFixed(2));
+  line.setAttribute("y2", point.y.toFixed(2));
   handle.setAttribute("cx", point.x.toFixed(2));
   handle.setAttribute("cy", point.y.toFixed(2));
 }
 
-function angleHandlePoint(degrees: number): Vec2 {
-  const radians = degreesToRadians(degrees);
+function dialGeometry(side: BoundarySide): {
+  center: Vec2;
+  radius: number;
+  arcPath: string;
+  flatPath: string;
+} {
+  const radius = 40;
+  const outwardBySide: Record<BoundarySide, Vec2> = {
+    left: { x: -1, y: 0 },
+    right: { x: 1, y: 0 },
+    top: { x: 0, y: -1 },
+    bottom: { x: 0, y: 1 },
+  };
+  const centerBySide: Record<BoundarySide, Vec2> = {
+    left: { x: 100, y: 36 },
+    right: { x: 20, y: 36 },
+    top: { x: 60, y: 58 },
+    bottom: { x: 60, y: 14 },
+  };
+  const center = centerBySide[side];
+  const outward = outwardBySide[side];
+  const tangent = { x: -outward.y, y: outward.x };
+  const start = { x: center.x - tangent.x * radius, y: center.y - tangent.y * radius };
+  const end = { x: center.x + tangent.x * radius, y: center.y + tangent.y * radius };
 
   return {
-    x: 60 + Math.sin(radians) * 42,
-    y: 48 - Math.cos(radians) * 42,
+    center,
+    radius,
+    arcPath: semiCirclePath(center, outward, tangent, radius),
+    flatPath: `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} L ${end.x.toFixed(2)} ${end.y.toFixed(2)}`,
   };
+}
+
+function semiCirclePath(center: Vec2, outward: Vec2, tangent: Vec2, radius: number): string {
+  const points: Vec2[] = [];
+
+  for (let index = 0; index <= 24; index += 1) {
+    const theta = Math.PI - (Math.PI * index) / 24;
+    points.push({
+      x: center.x + Math.cos(theta) * tangent.x * radius + Math.sin(theta) * outward.x * radius,
+      y: center.y + Math.cos(theta) * tangent.y * radius + Math.sin(theta) * outward.y * radius,
+    });
+  }
+
+  return points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(" ");
+}
+
+function normalizeVector(vector: Vec2): Vec2 {
+  const length = Math.max(Math.hypot(vector.x, vector.y), 0.001);
+
+  return {
+    x: vector.x / length,
+    y: vector.y / length,
+  };
+}
+
+function normalizeAngle(angle: number): number {
+  let nextAngle = angle;
+
+  while (nextAngle > Math.PI) {
+    nextAngle -= Math.PI * 2;
+  }
+
+  while (nextAngle < -Math.PI) {
+    nextAngle += Math.PI * 2;
+  }
+
+  return nextAngle;
 }
 
 function draw(): void {
@@ -539,60 +649,72 @@ function drawGrid(): void {
 }
 
 function drawStreamlines(): void {
-  const seeds = makeSeeds();
+  const acceptedSamples: Vec2[] = [];
+  const candidates = makeStreamlineCandidates();
 
   context.save();
   context.lineWidth = 1.25;
 
-  seeds.forEach((seed, index) => {
-    const forward = traceStreamline(seed, 1);
-    const backward = traceStreamline(seed, -1).reverse();
-    const line = [...backward, seed, ...forward];
+  candidates.forEach((seed, index) => {
+    if (!hasEnoughSpacing(seed, acceptedSamples)) {
+      return;
+    }
 
-    if (line.length < 4) {
+    const line = traceAdaptiveStreamline(seed, acceptedSamples);
+
+    if (line.length < 16) {
       return;
     }
 
     context.strokeStyle = index % 4 === 0 ? colors.streamline : colors.streamlineMuted;
-    context.beginPath();
-    line.forEach((point, pointIndex) => {
-      const screen = worldToScreen(point);
-      if (pointIndex === 0) {
-        context.moveTo(screen.x, screen.y);
-      } else {
-        context.lineTo(screen.x, screen.y);
-      }
-    });
-    context.stroke();
-
-    if (state.showSeeds) {
-      const screenSeed = worldToScreen(seed);
-      context.fillStyle = colors.marker;
-      context.beginPath();
-      context.arc(screenSeed.x, screenSeed.y, 2.4, 0, Math.PI * 2);
-      context.fill();
-    }
+    drawPolyline(line);
+    acceptedSamples.push(...samplePolyline(line));
   });
+
+  if (state.showSeeds) {
+    drawAcceptedSamples(acceptedSamples);
+  }
 
   context.restore();
 }
 
-function traceStreamline(start: Vec2, direction: 1 | -1): Vec2[] {
-  const points: Vec2[] = [];
-  let point = start;
+function makeStreamlineCandidates(): Vec2[] {
+  const candidates: Vec2[] = [];
 
-  for (let i = 0; i < TRACE_STEPS; i += 1) {
+  for (let y = -WORLD_HALF_HEIGHT + DOMAIN_MARGIN; y <= WORLD_HALF_HEIGHT - DOMAIN_MARGIN; y += STREAMLINE_CANDIDATE_SPACING) {
+    for (let x = -WORLD_HALF_WIDTH + DOMAIN_MARGIN; x <= WORLD_HALF_WIDTH - DOMAIN_MARGIN; x += STREAMLINE_CANDIDATE_SPACING) {
+      candidates.push({ x, y });
+    }
+  }
+
+  return candidates.sort((first, second) => {
+    const firstSpeed = magnitude(velocityAtPoint(first, activeFlows()));
+    const secondSpeed = magnitude(velocityAtPoint(second, activeFlows()));
+    return secondSpeed - firstSpeed;
+  });
+}
+
+function traceAdaptiveStreamline(seed: Vec2, acceptedSamples: Vec2[]): Vec2[] {
+  const backward = traceStreamlineDirection(seed, -1, acceptedSamples).reverse();
+  const forward = traceStreamlineDirection(seed, 1, acceptedSamples);
+  return [...backward, seed, ...forward];
+}
+
+function traceStreamlineDirection(seed: Vec2, direction: 1 | -1, acceptedSamples: Vec2[]): Vec2[] {
+  const points: Vec2[] = [];
+  let point = seed;
+
+  for (let step = 0; step < STREAMLINE_MAX_STEPS; step += 1) {
     const velocity = velocityAtPoint(point, activeFlows());
     const speed = magnitude(velocity);
 
-    if (speed < 0.03 || isOutOfBounds(point)) {
+    if (speed < 0.025) {
       break;
     }
 
-    const unit = { x: velocity.x / speed, y: velocity.y / speed };
-    const next = rk4Step(point, unit, STEP_SIZE * direction);
+    const next = rk4StreamlineStep(point, STREAMLINE_STEP * direction);
 
-    if (isOutOfBounds(next)) {
+    if (isOutOfDomain(next) || !hasEnoughSpacing(next, acceptedSamples)) {
       break;
     }
 
@@ -603,22 +725,76 @@ function traceStreamline(start: Vec2, direction: 1 | -1): Vec2[] {
   return points;
 }
 
-function rk4Step(point: Vec2, unitVelocity: Vec2, step: number): Vec2 {
-  const sampleUnit = (sample: Vec2): Vec2 => {
+function rk4StreamlineStep(point: Vec2, step: number): Vec2 {
+  const unitVelocity = (sample: Vec2): Vec2 => {
     const velocity = velocityAtPoint(sample, activeFlows());
     const speed = Math.max(magnitude(velocity), 0.001);
     return { x: velocity.x / speed, y: velocity.y / speed };
   };
-
-  const k1 = unitVelocity;
-  const k2 = sampleUnit({ x: point.x + (step * k1.x) / 2, y: point.y + (step * k1.y) / 2 });
-  const k3 = sampleUnit({ x: point.x + (step * k2.x) / 2, y: point.y + (step * k2.y) / 2 });
-  const k4 = sampleUnit({ x: point.x + step * k3.x, y: point.y + step * k3.y });
+  const k1 = unitVelocity(point);
+  const k2 = unitVelocity({ x: point.x + (step * k1.x) / 2, y: point.y + (step * k1.y) / 2 });
+  const k3 = unitVelocity({ x: point.x + (step * k2.x) / 2, y: point.y + (step * k2.y) / 2 });
+  const k4 = unitVelocity({ x: point.x + step * k3.x, y: point.y + step * k3.y });
 
   return {
     x: point.x + (step / 6) * (k1.x + 2 * k2.x + 2 * k3.x + k4.x),
     y: point.y + (step / 6) * (k1.y + 2 * k2.y + 2 * k3.y + k4.y),
   };
+}
+
+function hasEnoughSpacing(point: Vec2, acceptedSamples: Vec2[]): boolean {
+  const requiredDistance = requiredStreamlineSpacing(point);
+  const screenPoint = worldToScreen(point);
+
+  return acceptedSamples.every((sample) => {
+    const screenSample = worldToScreen(sample);
+    return Math.hypot(screenPoint.x - screenSample.x, screenPoint.y - screenSample.y) >= requiredDistance;
+  });
+}
+
+function requiredStreamlineSpacing(point: Vec2): number {
+  const speed = magnitude(velocityAtPoint(point, activeFlows()));
+  return clamp(STREAMLINE_BASE_SPACING / Math.sqrt(1 + speed * 0.55), STREAMLINE_MIN_SPACING, STREAMLINE_BASE_SPACING);
+}
+
+function samplePolyline(line: Vec2[]): Vec2[] {
+  return line.filter((_, index) => index % STREAMLINE_SAMPLE_STRIDE === 0);
+}
+
+function drawPolyline(line: Vec2[]): void {
+  context.beginPath();
+
+  line.forEach((point, index) => {
+    const screen = worldToScreen(point);
+
+    if (index === 0) {
+      context.moveTo(screen.x, screen.y);
+    } else {
+      context.lineTo(screen.x, screen.y);
+    }
+  });
+
+  context.stroke();
+}
+
+function drawAcceptedSamples(samples: Vec2[]): void {
+  context.fillStyle = colors.marker;
+
+  samples.forEach((sample) => {
+    const point = worldToScreen(sample);
+    context.beginPath();
+    context.arc(point.x, point.y, 1.5, 0, Math.PI * 2);
+    context.fill();
+  });
+}
+
+function isOutOfDomain(point: Vec2): boolean {
+  return (
+    point.x < -WORLD_HALF_WIDTH ||
+    point.x > WORLD_HALF_WIDTH ||
+    point.y < -WORLD_HALF_HEIGHT ||
+    point.y > WORLD_HALF_HEIGHT
+  );
 }
 
 function drawVectors(): void {
@@ -658,7 +834,7 @@ function drawSingularities(): void {
     }
 
     const point = worldToScreen({ x: flow.x, y: flow.y });
-    context.fillStyle = colors.marker;
+    context.fillStyle = primitiveColor(flow);
     context.strokeStyle = flow.id === state.selectedFlowId ? colors.markerStroke : colors.axis;
     context.lineWidth = flow.id === state.selectedFlowId ? 2.5 : 1.5;
     context.beginPath();
@@ -676,6 +852,94 @@ function drawSingularities(): void {
   });
 
   context.restore();
+}
+
+function primitiveColor(flow: Flow): string {
+  if (flow.kind === "uniform") {
+    return colors.marker;
+  }
+
+  return primitiveColors[flow.kind];
+}
+
+function updateHoveredFlow(flow: Flow | null): void {
+  if (dragState) {
+    clearHoverTooltip();
+    return;
+  }
+
+  if (!flow) {
+    clearHoverTooltip();
+    return;
+  }
+
+  if (hoveredFlowId === flow.id) {
+    return;
+  }
+
+  clearHoverTooltip();
+  hoveredFlowId = flow.id;
+  hoverTimer = window.setTimeout(() => {
+    if (dragState || hoveredFlowId !== flow.id) {
+      return;
+    }
+
+    showPrimitiveTooltip(flow);
+  }, HOVER_REVEAL_DELAY_MS);
+}
+
+function clearHoverTooltip(): void {
+  hoveredFlowId = null;
+
+  if (hoverTimer !== null) {
+    window.clearTimeout(hoverTimer);
+    hoverTimer = null;
+  }
+
+  primitiveTooltip.hidden = true;
+  primitiveTooltip.innerHTML = "";
+}
+
+function showPrimitiveTooltip(flow: Flow): void {
+  const type = flowLabel(flow.kind);
+
+  primitiveTooltip.style.setProperty("--tooltip-flow-color", primitiveColor(flow));
+  primitiveTooltip.innerHTML = `
+    <div class="primitive-tooltip-title">${flow.name}</div>
+    <div class="primitive-tooltip-type">${type}</div>
+    <code>${streamFunctionLabel(flow.kind)}</code>
+  `;
+  primitiveTooltip.hidden = false;
+  positionPrimitiveTooltip(flow);
+}
+
+function positionPrimitiveTooltip(flow: Flow): void {
+  const layout = requiredElement<HTMLDivElement>(".boundary-layout");
+  const layoutRect = layout.getBoundingClientRect();
+  const canvasRect = canvas.getBoundingClientRect();
+  const point = worldToScreen({ x: flow.x, y: flow.y });
+  const tooltipWidth = 260;
+  const tooltipHeight = 112;
+  const left = clamp(canvasRect.left - layoutRect.left + point.x + 16, 10, layoutRect.width - tooltipWidth - 10);
+  const top = clamp(canvasRect.top - layoutRect.top + point.y - 18, 10, layoutRect.height - tooltipHeight - 10);
+
+  primitiveTooltip.style.left = `${left}px`;
+  primitiveTooltip.style.top = `${top}px`;
+}
+
+function streamFunctionLabel(kind: FlowKind): string {
+  switch (kind) {
+    case "uniform":
+      return "psi = U(y cos alpha - x sin alpha)";
+    case "source":
+      return "psi = (Q / 2pi) theta";
+    case "sink":
+      return "psi = -(Q / 2pi) theta";
+    case "doublet":
+      return "psi = -(mu / 2pi r) sin(theta - alpha)";
+    case "vortex":
+      return "psi = -(Gamma / 2pi) ln r";
+  }
 }
 
 function findFlowAtScreenPoint(point: Vec2): Flow | null {
@@ -728,22 +992,6 @@ function drawArrow(start: Vec2, end: Vec2): void {
   context.fill();
 }
 
-function makeSeeds(): Vec2[] {
-  const seeds: Vec2[] = [];
-
-  for (let y = -WORLD_HALF_HEIGHT + DOMAIN_MARGIN; y <= WORLD_HALF_HEIGHT - DOMAIN_MARGIN; y += SEED_SPACING) {
-    seeds.push({ x: -WORLD_HALF_WIDTH + DOMAIN_MARGIN, y });
-    seeds.push({ x: WORLD_HALF_WIDTH - DOMAIN_MARGIN, y });
-  }
-
-  for (let x = -WORLD_HALF_WIDTH + DOMAIN_MARGIN; x <= WORLD_HALF_WIDTH - DOMAIN_MARGIN; x += SEED_SPACING) {
-    seeds.push({ x, y: -WORLD_HALF_HEIGHT + DOMAIN_MARGIN });
-    seeds.push({ x, y: WORLD_HALF_HEIGHT - DOMAIN_MARGIN });
-  }
-
-  return seeds;
-}
-
 function worldToScreen(point: Vec2): Vec2 {
   return {
     x: ((point.x + WORLD_HALF_WIDTH) / (WORLD_HALF_WIDTH * 2)) * CANVAS_WIDTH,
@@ -756,15 +1004,6 @@ function screenToWorld(point: Vec2): Vec2 {
     x: (point.x / CANVAS_WIDTH) * WORLD_HALF_WIDTH * 2 - WORLD_HALF_WIDTH,
     y: WORLD_HALF_HEIGHT - (point.y / CANVAS_HEIGHT) * WORLD_HALF_HEIGHT * 2,
   };
-}
-
-function isOutOfBounds(point: Vec2): boolean {
-  return (
-    point.x < -WORLD_HALF_WIDTH ||
-    point.x > WORLD_HALF_WIDTH ||
-    point.y < -WORLD_HALF_HEIGHT ||
-    point.y > WORLD_HALF_HEIGHT
-  );
 }
 
 function degreesToRadians(value: number): number {

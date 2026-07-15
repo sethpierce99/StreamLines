@@ -16,6 +16,10 @@
   --vector: rgba(250, 201, 95, 0.7);
   --marker: #f17f55;
   --marker-stroke: #fff2d6;
+  --flow-source: #5bd68d;
+  --flow-sink: #ff6b7a;
+  --flow-doublet: #79b8ff;
+  --flow-vortex: #c58cff;
 }
 
 * {
@@ -125,10 +129,19 @@ button:hover {
 
 .flow-row {
   display: grid;
-  grid-template-columns: 20px 1fr auto;
+  grid-template-columns: 20px 12px 1fr auto;
   align-items: center;
   gap: 8px;
   min-height: 34px;
+}
+
+.flow-row::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  background: var(--flow-color);
 }
 
 .flow-select {
@@ -226,6 +239,7 @@ button:hover {
 }
 
 .boundary-layout {
+  position: relative;
   display: grid;
   grid-template-columns: 160px 820px 160px;
   grid-template-rows: 88px 500px 88px;
@@ -367,8 +381,8 @@ button:hover {
 }
 
 .angle-arc-track,
-.angle-arc-normal,
-.angle-arc-ray {
+.angle-arc-flat,
+.angle-arc-line {
   fill: none;
   stroke-linecap: round;
 }
@@ -378,12 +392,12 @@ button:hover {
   stroke-width: 5;
 }
 
-.angle-arc-normal {
+.angle-arc-flat {
   stroke: rgba(206, 221, 225, 0.28);
   stroke-width: 2;
 }
 
-.angle-arc-ray {
+.angle-arc-line {
   stroke: #fac95f;
   stroke-width: 3;
 }
@@ -413,6 +427,42 @@ canvas.is-draggable {
 
 canvas.is-dragging {
   cursor: grabbing;
+}
+
+.primitive-tooltip {
+  position: absolute;
+  z-index: 5;
+  width: 260px;
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid rgba(214, 231, 231, 0.22);
+  border-left: 4px solid var(--tooltip-flow-color);
+  border-radius: 8px;
+  color: #ecf4f2;
+  background: rgba(23, 27, 34, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+}
+
+.primitive-tooltip[hidden] {
+  display: none;
+}
+
+.primitive-tooltip-title {
+  font-weight: 700;
+}
+
+.primitive-tooltip-type {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.primitive-tooltip code {
+  display: block;
+  color: #fac95f;
+  white-space: normal;
+  line-height: 1.35;
 }
 
 .readout {

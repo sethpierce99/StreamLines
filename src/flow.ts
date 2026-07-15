@@ -35,6 +35,16 @@ export function velocityAtPoint(point: Vec2, flows: Flow[]): Vec2 {
   );
 }
 
+export function streamFunctionAtPoint(point: Vec2, flows: Flow[]): number {
+  return flows.reduce((psi, flow) => {
+    if (!flow.enabled) {
+      return psi;
+    }
+
+    return psi + streamFunctionFromFlow(point, flow);
+  }, 0);
+}
+
 export function velocityFromFlow(point: Vec2, flow: Flow): Vec2 {
   if (flow.kind === "uniform") {
     return {
@@ -73,6 +83,28 @@ export function velocityFromFlow(point: Vec2, flow: Flow): Vec2 {
     x: scale * (axisX * r2 - 2 * dx * dot),
     y: scale * (axisY * r2 - 2 * dy * dot),
   };
+}
+
+export function streamFunctionFromFlow(point: Vec2, flow: Flow): number {
+  if (flow.kind === "uniform") {
+    return flow.strength * (point.y * Math.cos(flow.angle) - point.x * Math.sin(flow.angle));
+  }
+
+  const dx = point.x - flow.x;
+  const dy = point.y - flow.y;
+  const radius = Math.max(Math.hypot(dx, dy), Math.sqrt(CORE_RADIUS_SQUARED));
+  const theta = Math.atan2(dy, dx);
+
+  if (flow.kind === "source" || flow.kind === "sink") {
+    const sign = flow.kind === "source" ? 1 : -1;
+    return (sign * flow.strength * theta) / TAU;
+  }
+
+  if (flow.kind === "vortex") {
+    return -(flow.strength * Math.log(radius)) / TAU;
+  }
+
+  return -((flow.strength * Math.sin(theta - flow.angle)) / (TAU * radius));
 }
 
 export function magnitude(vector: Vec2): number {
