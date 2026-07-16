@@ -111,12 +111,63 @@ button:hover {
 .button-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 10px;
 }
 
 .button-grid button,
 #reset-case {
   min-height: 34px;
+}
+
+.flow-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 12px;
+}
+
+.primitive-symbol {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  color: var(--symbol-color);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.flow-add-source {
+  --symbol-color: var(--flow-source);
+}
+
+.flow-add-sink {
+  --symbol-color: var(--flow-sink);
+}
+
+.flow-add-doublet {
+  --symbol-color: var(--flow-doublet);
+}
+
+.flow-add-vortex {
+  --symbol-color: var(--flow-vortex);
+}
+
+.primitive-symbol circle,
+.primitive-symbol rect {
+  fill: currentColor;
+}
+
+.primitive-symbol marker path {
+  fill: currentColor;
+  stroke: none;
+}
+
+.primitive-symbol .symbol-outline {
+  fill: none;
 }
 
 .flow-list {

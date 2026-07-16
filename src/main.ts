@@ -68,10 +68,50 @@ app.innerHTML = `
       <section class="control-group" aria-labelledby="add-flow-label">
         <h2 id="add-flow-label">Add Primitive</h2>
         <div class="button-grid">
-          <button class="flow-add" type="button" data-kind="source">Source</button>
-          <button class="flow-add" type="button" data-kind="sink">Sink</button>
-          <button class="flow-add" type="button" data-kind="doublet">Doublet</button>
-          <button class="flow-add" type="button" data-kind="vortex">Vortex</button>
+          <button class="flow-add flow-add-source" type="button" data-kind="source">
+            <svg class="primitive-symbol" viewBox="0 0 40 40" aria-hidden="true">
+              <defs>
+                <marker id="source-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+                  <path d="M0 0 L5 2.5 L0 5 Z"></path>
+                </marker>
+              </defs>
+              <circle cx="20" cy="20" r="2.8"></circle>
+              <path marker-end="url(#source-arrow)" d="M20 17 L20 5 M23 17 L31 9 M23 20 L35 20 M23 23 L31 31 M20 23 L20 35 M17 23 L9 31 M17 20 L5 20 M17 17 L9 9"></path>
+            </svg>
+            Source
+          </button>
+          <button class="flow-add flow-add-sink" type="button" data-kind="sink">
+            <svg class="primitive-symbol" viewBox="0 0 40 40" aria-hidden="true">
+              <defs>
+                <marker id="sink-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+                  <path d="M0 0 L5 2.5 L0 5 Z"></path>
+                </marker>
+              </defs>
+              <circle cx="20" cy="20" r="2.8"></circle>
+              <path marker-end="url(#sink-arrow)" d="M20 5 L20 17 M31 9 L23 17 M35 20 L23 20 M31 31 L23 23 M20 35 L20 23 M9 31 L17 23 M5 20 L17 20 M9 9 L17 17"></path>
+            </svg>
+            Sink
+          </button>
+          <button class="flow-add flow-add-doublet" type="button" data-kind="doublet">
+            <svg class="primitive-symbol" viewBox="0 0 40 40" aria-hidden="true">
+              <rect x="15" y="18" width="10" height="4" rx="2"></rect>
+              <path d="M15 20 C6 13, 6 27, 15 20 M25 20 C34 13, 34 27, 25 20"></path>
+              <path d="M15 16 C10 6, 30 6, 25 16 M15 24 C10 34, 30 34, 25 24"></path>
+            </svg>
+            Doublet
+          </button>
+          <button class="flow-add flow-add-vortex" type="button" data-kind="vortex">
+            <svg class="primitive-symbol" viewBox="0 0 40 40" aria-hidden="true">
+              <defs>
+                <marker id="vortex-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+                  <path d="M0 0 L5 2.5 L0 5 Z"></path>
+                </marker>
+              </defs>
+              <circle class="symbol-outline" cx="20" cy="20" r="15"></circle>
+              <path marker-end="url(#vortex-arrow)" d="M27 14 A9 9 0 1 0 28 25"></path>
+            </svg>
+            Vortex
+          </button>
         </div>
       </section>
 
