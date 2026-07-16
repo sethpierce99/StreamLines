@@ -12,10 +12,11 @@ const DOMAIN_MARGIN = 0.25;
 const HOVER_REVEAL_DELAY_MS = 2000;
 const STREAMLINE_STEP = 0.045;
 const STREAMLINE_MAX_STEPS = 620;
-const STREAMLINE_CANDIDATE_SPACING = 0.34;
-const STREAMLINE_SAMPLE_STRIDE = 5;
-const STREAMLINE_BASE_SPACING = 15;
-const STREAMLINE_MIN_SPACING = 5.5;
+const STREAMLINE_CANDIDATE_SPACING = 0.24;
+const STREAMLINE_SAMPLE_STRIDE = 4;
+const STREAMLINE_BASE_SPACING = 12;
+const STREAMLINE_MIN_SPACING = 4.5;
+const STREAMLINE_SPACING_CELL_SIZE = 12;
 
 type BoundarySide = "left" | "right" | "top" | "bottom";
 
@@ -650,17 +651,18 @@ function drawGrid(): void {
 
 function drawStreamlines(): void {
   const acceptedSamples: Vec2[] = [];
+  const spacingGrid = new SpacingGrid(STREAMLINE_SPACING_CELL_SIZE);
   const candidates = makeStreamlineCandidates();
 
   context.save();
   context.lineWidth = 1.25;
 
   candidates.forEach((seed, index) => {
-    if (!hasEnoughSpacing(seed, acceptedSamples)) {
+    if (!spacingGrid.canAccept(seed, requiredStreamlineSpacing(seed))) {
       return;
     }
 
-    const line = traceAdaptiveStreamline(seed, acceptedSamples);
+    const line = traceAdaptiveStreamline(seed, spacingGrid);
 
     if (line.length < 16) {
       return;
@@ -668,7 +670,9 @@ function drawStreamlines(): void {
 
     context.strokeStyle = index % 4 === 0 ? colors.streamline : colors.streamlineMuted;
     drawPolyline(line);
-    acceptedSamples.push(...samplePolyline(line));
+    const samples = samplePolyline(line);
+    acceptedSamples.push(...samples);
+    spacingGrid.addMany(samples);
   });
 
   if (state.showSeeds) {
@@ -694,13 +698,13 @@ function makeStreamlineCandidates(): Vec2[] {
   });
 }
 
-function traceAdaptiveStreamline(seed: Vec2, acceptedSamples: Vec2[]): Vec2[] {
-  const backward = traceStreamlineDirection(seed, -1, acceptedSamples).reverse();
-  const forward = traceStreamlineDirection(seed, 1, acceptedSamples);
+function traceAdaptiveStreamline(seed: Vec2, spacingGrid: SpacingGrid): Vec2[] {
+  const backward = traceStreamlineDirection(seed, -1, spacingGrid).reverse();
+  const forward = traceStreamlineDirection(seed, 1, spacingGrid);
   return [...backward, seed, ...forward];
 }
 
-function traceStreamlineDirection(seed: Vec2, direction: 1 | -1, acceptedSamples: Vec2[]): Vec2[] {
+function traceStreamlineDirection(seed: Vec2, direction: 1 | -1, spacingGrid: SpacingGrid): Vec2[] {
   const points: Vec2[] = [];
   let point = seed;
 
@@ -714,7 +718,7 @@ function traceStreamlineDirection(seed: Vec2, direction: 1 | -1, acceptedSamples
 
     const next = rk4StreamlineStep(point, STREAMLINE_STEP * direction);
 
-    if (isOutOfDomain(next) || !hasEnoughSpacing(next, acceptedSamples)) {
+    if (isOutOfDomain(next) || !spacingGrid.canAccept(next, requiredStreamlineSpacing(next))) {
       break;
     }
 
@@ -742,19 +746,68 @@ function rk4StreamlineStep(point: Vec2, step: number): Vec2 {
   };
 }
 
-function hasEnoughSpacing(point: Vec2, acceptedSamples: Vec2[]): boolean {
-  const requiredDistance = requiredStreamlineSpacing(point);
-  const screenPoint = worldToScreen(point);
-
-  return acceptedSamples.every((sample) => {
-    const screenSample = worldToScreen(sample);
-    return Math.hypot(screenPoint.x - screenSample.x, screenPoint.y - screenSample.y) >= requiredDistance;
-  });
-}
-
 function requiredStreamlineSpacing(point: Vec2): number {
   const speed = magnitude(velocityAtPoint(point, activeFlows()));
   return clamp(STREAMLINE_BASE_SPACING / Math.sqrt(1 + speed * 0.55), STREAMLINE_MIN_SPACING, STREAMLINE_BASE_SPACING);
+}
+
+class SpacingGrid {
+  private readonly cells = new Map<string, Vec2[]>();
+
+  constructor(private readonly cellSize: number) {}
+
+  canAccept(point: Vec2, requiredDistance: number): boolean {
+    const screenPoint = worldToScreen(point);
+    const cell = this.cellFor(screenPoint);
+    const radius = Math.ceil(requiredDistance / this.cellSize);
+
+    for (let y = cell.y - radius; y <= cell.y + radius; y += 1) {
+      for (let x = cell.x - radius; x <= cell.x + radius; x += 1) {
+        const samples = this.cells.get(this.key(x, y));
+
+        if (!samples) {
+          continue;
+        }
+
+        const tooClose = samples.some((sample) => {
+          const screenSample = worldToScreen(sample);
+          return Math.hypot(screenPoint.x - screenSample.x, screenPoint.y - screenSample.y) < requiredDistance;
+        });
+
+        if (tooClose) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  addMany(points: Vec2[]): void {
+    points.forEach((point) => {
+      const screenPoint = worldToScreen(point);
+      const cell = this.cellFor(screenPoint);
+      const key = this.key(cell.x, cell.y);
+      const samples = this.cells.get(key);
+
+      if (samples) {
+        samples.push(point);
+      } else {
+        this.cells.set(key, [point]);
+      }
+    });
+  }
+
+  private cellFor(point: Vec2): Vec2 {
+    return {
+      x: Math.floor(point.x / this.cellSize),
+      y: Math.floor(point.y / this.cellSize),
+    };
+  }
+
+  private key(x: number, y: number): string {
+    return `${x},${y}`;
+  }
 }
 
 function samplePolyline(line: Vec2[]): Vec2[] {
