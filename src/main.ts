@@ -1,10 +1,10 @@
 import "./style.css";
 import { type Flow, type FlowKind, type Vec2, flowLabel, magnitude, velocityAtPoint } from "./flow";
 
-const CANVAS_WIDTH = 820;
-const CANVAS_HEIGHT = 500;
-const WORLD_HALF_WIDTH = 5.5;
-const WORLD_HALF_HEIGHT = 3.35;
+const CANVAS_WIDTH = 940;
+const CANVAS_HEIGHT = 560;
+const WORLD_HALF_WIDTH = 6.2;
+const WORLD_HALF_HEIGHT = 3.7;
 const GRID_SNAP = 0.25;
 const DRAG_HIT_RADIUS = 14;
 const SIDE_ANGLE_LIMIT = 80;
@@ -17,8 +17,21 @@ const STREAMLINE_SAMPLE_STRIDE = 4;
 const STREAMLINE_BASE_SPACING = 12;
 const STREAMLINE_MIN_SPACING = 4.5;
 const STREAMLINE_SPACING_CELL_SIZE = 12;
+const VECTOR_MIN_LENGTH_WORLD = 0.12;
+const VECTOR_MAX_LENGTH_WORLD = 0.55;
+const VECTOR_SPEED_REFERENCE = 3;
+const PRESSURE_GRID_COLUMNS = 118;
+const PRESSURE_GRID_ROWS = 70;
+const PRESSURE_MIN_CP = -3;
+const PRESSURE_MAX_CP = 1;
+const DYNAMIC_PRESSURE_MAX = 4;
+const STAGNATION_GRID_COLUMNS = 90;
+const STAGNATION_GRID_ROWS = 54;
+const STAGNATION_SPEED_THRESHOLD = 0.08;
+const STAGNATION_MIN_SEPARATION_PX = 28;
 
 type BoundarySide = "left" | "right" | "top" | "bottom";
+type PressureMode = "static" | "dynamic";
 
 type SideFlow = {
   side: BoundarySide;
@@ -28,8 +41,12 @@ type SideFlow = {
 };
 
 type ViewState = {
+  showStreamlines: boolean;
   showVectors: boolean;
   showSeeds: boolean;
+  showPressureContours: boolean;
+  pressureMode: PressureMode;
+  showStagnationPoints: boolean;
   selectedFlowId: string | null;
   flows: Flow[];
   sideFlows: SideFlow[];
@@ -40,8 +57,12 @@ type DragState = {
 };
 
 const state: ViewState = {
+  showStreamlines: true,
   showVectors: true,
   showSeeds: false,
+  showPressureContours: false,
+  pressureMode: "static",
+  showStagnationPoints: true,
   selectedFlowId: null,
   flows: [],
   sideFlows: createDefaultSideFlows(),
@@ -127,12 +148,31 @@ app.innerHTML = `
 
       <section class="pane-footer" aria-label="Visualization controls">
         <label class="toggle">
+          <input id="toggle-streamlines" type="checkbox" checked />
+          Streamlines
+        </label>
+        <label class="toggle">
           <input id="toggle-vectors" type="checkbox" checked />
           Velocity vectors
         </label>
         <label class="toggle">
           <input id="toggle-seeds" type="checkbox" />
           Seed points
+        </label>
+        <label class="toggle">
+          <input id="toggle-pressure" type="checkbox" />
+          Pressure field
+        </label>
+        <label class="footer-field">
+          <span>Pressure mode</span>
+          <select id="pressure-mode">
+            <option value="static">Static Cp</option>
+            <option value="dynamic">Dynamic q*</option>
+          </select>
+        </label>
+        <label class="toggle">
+          <input id="toggle-stagnation" type="checkbox" checked />
+          Stagnation points
         </label>
         <button id="reset-case" type="button">Reset</button>
       </section>
@@ -158,8 +198,12 @@ const flowList = requiredElement<HTMLDivElement>("#flow-list");
 const flowEditor = requiredElement<HTMLDivElement>("#flow-editor");
 const readout = requiredElement<HTMLDivElement>("#readout");
 const primitiveTooltip = requiredElement<HTMLDivElement>("#primitive-tooltip");
+const streamlineToggle = requiredElement<HTMLInputElement>("#toggle-streamlines");
 const vectorToggle = requiredElement<HTMLInputElement>("#toggle-vectors");
 const seedToggle = requiredElement<HTMLInputElement>("#toggle-seeds");
+const pressureToggle = requiredElement<HTMLInputElement>("#toggle-pressure");
+const pressureModeSelect = requiredElement<HTMLSelectElement>("#pressure-mode");
+const stagnationToggle = requiredElement<HTMLInputElement>("#toggle-stagnation");
 const resetButton = requiredElement<HTMLButtonElement>("#reset-case");
 const sideControls = new Map<BoundarySide, HTMLDivElement>([
   ["left", requiredElement<HTMLDivElement>("#side-left")],
@@ -175,6 +219,8 @@ const colors = {
   axis: css.getPropertyValue("--canvas-axis").trim(),
   streamline: css.getPropertyValue("--streamline").trim(),
   streamlineMuted: css.getPropertyValue("--streamline-muted").trim(),
+  stagnation: css.getPropertyValue("--stagnation-point").trim(),
+  stagnationStroke: css.getPropertyValue("--stagnation-point-stroke").trim(),
   vector: css.getPropertyValue("--vector").trim(),
   marker: css.getPropertyValue("--marker").trim(),
   markerStroke: css.getPropertyValue("--marker-stroke").trim(),
@@ -218,6 +264,11 @@ document.querySelectorAll<HTMLButtonElement>(".flow-add").forEach((button) => {
   });
 });
 
+streamlineToggle.addEventListener("change", () => {
+  state.showStreamlines = streamlineToggle.checked;
+  draw();
+});
+
 vectorToggle.addEventListener("change", () => {
   state.showVectors = vectorToggle.checked;
   draw();
@@ -225,6 +276,21 @@ vectorToggle.addEventListener("change", () => {
 
 seedToggle.addEventListener("change", () => {
   state.showSeeds = seedToggle.checked;
+  draw();
+});
+
+pressureToggle.addEventListener("change", () => {
+  state.showPressureContours = pressureToggle.checked;
+  draw();
+});
+
+pressureModeSelect.addEventListener("change", () => {
+  state.pressureMode = pressureModeSelect.value as PressureMode;
+  draw();
+});
+
+stagnationToggle.addEventListener("change", () => {
+  state.showStagnationPoints = stagnationToggle.checked;
   draw();
 });
 
@@ -413,11 +479,11 @@ function renderSideControls(): void {
         ${sideName}
       </label>
       <label class="side-slider side-speed">
-        <span>Velocity <output>${sideFlow.speed.toFixed(1)}</output></span>
+        <span>V <output>${sideFlow.speed.toFixed(1)}</output></span>
         <input type="range" min="0" max="5" step="0.1" value="${sideFlow.speed}" data-side-speed="${sideFlow.side}" />
       </label>
       <div class="side-angle" data-side-angle="${sideFlow.side}">
-        <span>Angle <output>${angleDegrees.toFixed(0)} deg</output></span>
+        <span>A <output>${angleDegrees.toFixed(0)} deg</output></span>
         <svg viewBox="0 0 120 72" aria-hidden="true">
           <path class="angle-arc-track" d="${dial.arcPath}"></path>
           <path class="angle-arc-flat" d="${dial.flatPath}"></path>
@@ -506,28 +572,59 @@ function numberField(
 ): HTMLLabelElement {
   const field = document.createElement("label");
   field.className = "field";
-  const formatted = Number.isInteger(step) ? value.toFixed(0) : value.toFixed(1);
+  const formatted = formatFieldValue(value, step);
 
   field.innerHTML = `
     <span>${label} <output>${formatted}${unit ? ` ${unit}` : ""}</output></span>
-    <input type="range" min="${min}" max="${max}" step="${step}" value="${value}" />
+    <div class="field-control">
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${value}" />
+      <div class="stepper-buttons" aria-label="${label} step controls">
+        <button type="button" class="stepper-button" data-step="up" aria-label="Increase ${label}">▲</button>
+        <button type="button" class="stepper-button" data-step="down" aria-label="Decrease ${label}">▼</button>
+      </div>
+    </div>
   `;
 
   const input = field.querySelector<HTMLInputElement>("input");
   const output = field.querySelector<HTMLOutputElement>("output");
+  const increase = field.querySelector<HTMLButtonElement>('[data-step="up"]');
+  const decrease = field.querySelector<HTMLButtonElement>('[data-step="down"]');
 
-  if (!input || !output) {
+  if (!input || !output || !increase || !decrease) {
     throw new Error("Range field was not created.");
   }
 
-  input.addEventListener("input", () => {
-    const nextValue = Number(input.value);
-    onChange(nextValue);
-    output.textContent = `${Number.isInteger(step) ? nextValue.toFixed(0) : nextValue.toFixed(1)}${unit ? ` ${unit}` : ""}`;
+  const setValue = (nextValue: number) => {
+    const clampedValue = clamp(Number(nextValue.toFixed(4)), min, max);
+    input.value = String(clampedValue);
+    onChange(clampedValue);
+    output.textContent = `${formatFieldValue(clampedValue, step)}${unit ? ` ${unit}` : ""}`;
     draw();
+  };
+
+  input.addEventListener("input", () => {
+    setValue(Number(input.value));
+  });
+
+  increase.addEventListener("click", (event) => {
+    event.preventDefault();
+    setValue(Number(input.value) + 0.1);
+  });
+
+  decrease.addEventListener("click", (event) => {
+    event.preventDefault();
+    setValue(Number(input.value) - 0.1);
   });
 
   return field;
+}
+
+function formatFieldValue(value: number, step: number): string {
+  if (step >= 1) {
+    return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
+  }
+
+  return value.toFixed(1);
 }
 
 function requiredChild<T extends Element>(parent: Element, selector: string): T {
@@ -594,7 +691,7 @@ function dialGeometry(side: BoundarySide): {
   arcPath: string;
   flatPath: string;
 } {
-  const radius = 40;
+  const radius = 32;
   const outwardBySide: Record<BoundarySide, Vec2> = {
     left: { x: -1, y: 0 },
     right: { x: 1, y: 0 },
@@ -602,10 +699,10 @@ function dialGeometry(side: BoundarySide): {
     bottom: { x: 0, y: 1 },
   };
   const centerBySide: Record<BoundarySide, Vec2> = {
-    left: { x: 100, y: 36 },
-    right: { x: 20, y: 36 },
-    top: { x: 60, y: 58 },
-    bottom: { x: 60, y: 14 },
+    left: { x: 94, y: 36 },
+    right: { x: 26, y: 36 },
+    top: { x: 60, y: 54 },
+    bottom: { x: 60, y: 18 },
   };
   const center = centerBySide[side];
   const outward = outwardBySide[side];
@@ -664,10 +761,21 @@ function draw(): void {
   context.fillStyle = colors.background;
   context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   drawGrid();
-  drawStreamlines();
+
+  if (state.showPressureContours) {
+    drawPressureContours();
+  }
+
+  if (state.showStreamlines) {
+    drawStreamlines();
+  }
 
   if (state.showVectors) {
     drawVectors();
+  }
+
+  if (state.showStagnationPoints) {
+    drawStagnationPoints();
   }
 
   drawSingularities();
@@ -687,6 +795,116 @@ function drawGrid(): void {
   }
 
   context.restore();
+}
+
+type ScalarField = {
+  columns: number;
+  rows: number;
+  values: number[][];
+};
+
+function drawPressureContours(): void {
+  const field = buildPressureField();
+
+  context.save();
+  context.globalAlpha = 0.62;
+
+  for (let row = 0; row < field.rows; row += 1) {
+    for (let column = 0; column < field.columns; column += 1) {
+      const value =
+        (field.values[row][column] +
+          field.values[row][column + 1] +
+          field.values[row + 1][column] +
+          field.values[row + 1][column + 1]) /
+        4;
+      const x = (column / field.columns) * CANVAS_WIDTH;
+      const y = (row / field.rows) * CANVAS_HEIGHT;
+      const width = CANVAS_WIDTH / field.columns + 1;
+      const height = CANVAS_HEIGHT / field.rows + 1;
+
+      context.fillStyle = pressureColor(value, state.pressureMode);
+      context.fillRect(x, y, width, height);
+    }
+  }
+
+  context.restore();
+}
+
+function buildPressureField(): ScalarField {
+  const values: number[][] = [];
+  const flows = activeFlows();
+  const referenceSpeed = pressureReferenceSpeed(flows);
+
+  for (let row = 0; row <= PRESSURE_GRID_ROWS; row += 1) {
+    const y = -WORLD_HALF_HEIGHT + (row / PRESSURE_GRID_ROWS) * WORLD_HALF_HEIGHT * 2;
+    const valueRow: number[] = [];
+
+    for (let column = 0; column <= PRESSURE_GRID_COLUMNS; column += 1) {
+      const x = -WORLD_HALF_WIDTH + (column / PRESSURE_GRID_COLUMNS) * WORLD_HALF_WIDTH * 2;
+      const speed = magnitude(velocityAtPoint({ x, y }, flows));
+      const qStar = (speed / referenceSpeed) ** 2;
+      valueRow.push(state.pressureMode === "static" ? clamp(1 - qStar, PRESSURE_MIN_CP, PRESSURE_MAX_CP) : clamp(qStar, 0, DYNAMIC_PRESSURE_MAX));
+    }
+
+    values.push(valueRow);
+  }
+
+  return {
+    columns: PRESSURE_GRID_COLUMNS,
+    rows: PRESSURE_GRID_ROWS,
+    values,
+  };
+}
+
+function pressureReferenceSpeed(flows: Flow[]): number {
+  const boundarySpeed = state.sideFlows.reduce((speed, sideFlow) => {
+    if (!sideFlow.enabled) {
+      return speed;
+    }
+
+    return Math.max(speed, sideFlow.speed);
+  }, 0);
+  const uniformSpeed = flows.reduce((speed, flow) => {
+    if (!flow.enabled || flow.kind !== "uniform") {
+      return speed;
+    }
+
+    return Math.max(speed, Math.abs(flow.strength));
+  }, 0);
+
+  return Math.max(boundarySpeed, uniformSpeed, 1);
+}
+
+function pressureColor(value: number, mode: PressureMode): string {
+  if (mode === "dynamic") {
+    const t = clamp(value / DYNAMIC_PRESSURE_MAX, 0, 1);
+    const low = { r: 18, g: 25, b: 36 };
+    const mid = { r: 41, g: 144, b: 255 };
+    const high = { r: 255, g: 92, b: 56 };
+    const color = t < 0.5 ? mixColor(low, mid, t * 2) : mixColor(mid, high, (t - 0.5) * 2);
+
+    return `rgb(${color.r}, ${color.g}, ${color.b})`;
+  }
+
+  const t = clamp((value - PRESSURE_MIN_CP) / (PRESSURE_MAX_CP - PRESSURE_MIN_CP), 0, 1);
+  const low = { r: 46, g: 117, b: 255 };
+  const mid = { r: 20, g: 28, b: 38 };
+  const high = { r: 255, g: 80, b: 72 };
+  const color = t < 0.5 ? mixColor(low, mid, t * 2) : mixColor(mid, high, (t - 0.5) * 2);
+
+  return `rgb(${color.r}, ${color.g}, ${color.b})`;
+}
+
+function mixColor(start: { r: number; g: number; b: number }, end: { r: number; g: number; b: number }, t: number): {
+  r: number;
+  g: number;
+  b: number;
+} {
+  return {
+    r: Math.round(start.r + (end.r - start.r) * t),
+    g: Math.round(start.g + (end.g - start.g) * t),
+    b: Math.round(start.b + (end.b - start.b) * t),
+  };
 }
 
 function drawStreamlines(): void {
@@ -907,7 +1125,8 @@ function drawVectors(): void {
         continue;
       }
 
-      const scale = Math.min(0.28, 0.11 + speed * 0.035);
+      const speedFraction = Math.min(speed / VECTOR_SPEED_REFERENCE, 1);
+      const scale = VECTOR_MIN_LENGTH_WORLD + (VECTOR_MAX_LENGTH_WORLD - VECTOR_MIN_LENGTH_WORLD) * Math.sqrt(speedFraction);
       const unit = { x: velocity.x / speed, y: velocity.y / speed };
       const start = worldToScreen(point);
       const end = worldToScreen({ x: point.x + unit.x * scale, y: point.y + unit.y * scale });
@@ -916,6 +1135,99 @@ function drawVectors(): void {
   }
 
   context.restore();
+}
+
+function drawStagnationPoints(): void {
+  const points = findStagnationPoints();
+
+  if (points.length === 0) {
+    return;
+  }
+
+  context.save();
+  context.fillStyle = colors.stagnation;
+  context.strokeStyle = colors.stagnationStroke;
+  context.lineWidth = 2;
+
+  points.forEach((point) => {
+    const screen = worldToScreen(point);
+    context.beginPath();
+    context.arc(screen.x, screen.y, 5.5, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+    context.beginPath();
+    context.moveTo(screen.x - 9, screen.y);
+    context.lineTo(screen.x + 9, screen.y);
+    context.moveTo(screen.x, screen.y - 9);
+    context.lineTo(screen.x, screen.y + 9);
+    context.stroke();
+  });
+
+  context.restore();
+}
+
+function findStagnationPoints(): Vec2[] {
+  const flows = activeFlows();
+  const speedGrid: number[][] = [];
+
+  for (let row = 0; row <= STAGNATION_GRID_ROWS; row += 1) {
+    const y = -WORLD_HALF_HEIGHT + (row / STAGNATION_GRID_ROWS) * WORLD_HALF_HEIGHT * 2;
+    const speedRow: number[] = [];
+
+    for (let column = 0; column <= STAGNATION_GRID_COLUMNS; column += 1) {
+      const x = -WORLD_HALF_WIDTH + (column / STAGNATION_GRID_COLUMNS) * WORLD_HALF_WIDTH * 2;
+      speedRow.push(magnitude(velocityAtPoint({ x, y }, flows)));
+    }
+
+    speedGrid.push(speedRow);
+  }
+
+  const candidates: Array<Vec2 & { speed: number }> = [];
+
+  for (let row = 1; row < STAGNATION_GRID_ROWS; row += 1) {
+    for (let column = 1; column < STAGNATION_GRID_COLUMNS; column += 1) {
+      const speed = speedGrid[row][column];
+
+      if (speed > STAGNATION_SPEED_THRESHOLD || !isLocalSpeedMinimum(speedGrid, column, row)) {
+        continue;
+      }
+
+      candidates.push({
+        x: -WORLD_HALF_WIDTH + (column / STAGNATION_GRID_COLUMNS) * WORLD_HALF_WIDTH * 2,
+        y: -WORLD_HALF_HEIGHT + (row / STAGNATION_GRID_ROWS) * WORLD_HALF_HEIGHT * 2,
+        speed,
+      });
+    }
+  }
+
+  return candidates
+    .sort((first, second) => first.speed - second.speed)
+    .filter((candidate, index, sortedCandidates) => {
+      const screenCandidate = worldToScreen(candidate);
+      return sortedCandidates.slice(0, index).every((accepted) => {
+        const screenAccepted = worldToScreen(accepted);
+        return Math.hypot(screenCandidate.x - screenAccepted.x, screenCandidate.y - screenAccepted.y) > STAGNATION_MIN_SEPARATION_PX;
+      });
+    })
+    .slice(0, 12);
+}
+
+function isLocalSpeedMinimum(speedGrid: number[][], column: number, row: number): boolean {
+  const speed = speedGrid[row][column];
+
+  for (let y = row - 1; y <= row + 1; y += 1) {
+    for (let x = column - 1; x <= column + 1; x += 1) {
+      if (x === column && y === row) {
+        continue;
+      }
+
+      if (speedGrid[y][x] < speed) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 function drawSingularities(): void {

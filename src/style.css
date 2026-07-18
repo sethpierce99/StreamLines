@@ -13,6 +13,8 @@
   --canvas-axis: rgba(206, 221, 225, 0.34);
   --streamline: rgba(105, 190, 255, 0.88);
   --streamline-muted: rgba(105, 190, 255, 0.42);
+  --stagnation-point: #ffd166;
+  --stagnation-point-stroke: #10141a;
   --vector: rgba(250, 201, 95, 0.7);
   --marker: #f17f55;
   --marker-stroke: #fff2d6;
@@ -77,7 +79,8 @@ button:hover {
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   background: var(--panel);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .panel-header h1 {
@@ -246,9 +249,30 @@ button:hover {
   color: #fac95f;
 }
 
+.field-control {
+  display: grid;
+  grid-template-columns: 1fr 28px;
+  gap: 8px;
+  align-items: center;
+}
+
 .field input[type="range"] {
   width: 100%;
   accent-color: #69beff;
+}
+
+.stepper-buttons {
+  display: grid;
+  gap: 3px;
+}
+
+.stepper-button {
+  min-height: 18px;
+  padding: 0;
+  border-radius: 5px;
+  color: #fac95f;
+  font-size: 0.62rem;
+  line-height: 1;
 }
 
 .position-readout {
@@ -261,7 +285,6 @@ button:hover {
 .pane-footer {
   display: grid;
   gap: 10px;
-  margin-top: auto;
   padding-top: 14px;
   border-top: 1px solid var(--panel-border);
 }
@@ -285,6 +308,26 @@ button:hover {
   accent-color: #69beff;
 }
 
+.footer-field {
+  display: grid;
+  gap: 5px;
+  color: #dbe8e7;
+  font-size: 0.86rem;
+}
+
+.footer-field span {
+  color: var(--text-muted);
+}
+
+.footer-field select {
+  min-height: 32px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 0 9px;
+  color: #eff7f5;
+  background: var(--panel-strong);
+}
+
 #reset-case {
   padding: 0 16px;
 }
@@ -292,20 +335,20 @@ button:hover {
 .boundary-layout {
   position: relative;
   display: grid;
-  grid-template-columns: 160px 820px 160px;
-  grid-template-rows: 88px 500px 88px;
-  gap: 14px;
+  grid-template-columns: 86px 940px 86px;
+  grid-template-rows: 54px 560px 54px;
+  gap: 8px;
   align-items: stretch;
   justify-content: center;
 }
 
 .side-control {
   display: grid;
-  gap: 8px;
+  gap: 4px;
   align-content: center;
   justify-items: center;
   color: #dbe8e7;
-  font-size: 0.74rem;
+  font-size: 0.68rem;
 }
 
 .side-control-top {
@@ -348,7 +391,7 @@ button:hover {
 .side-slider span {
   display: flex;
   justify-content: space-between;
-  gap: 7px;
+  gap: 5px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -358,7 +401,7 @@ button:hover {
 }
 
 .side-slider input[type="range"] {
-  width: 205px;
+  width: 156px;
   accent-color: #69beff;
 }
 
@@ -366,8 +409,8 @@ button:hover {
 .side-control-right {
   justify-items: center;
   align-content: center;
-  grid-template-rows: 58px 250px 104px;
-  gap: 10px;
+  grid-template-rows: 42px 154px 72px;
+  gap: 6px;
 }
 
 .side-control-left .side-toggle,
@@ -379,7 +422,7 @@ button:hover {
 
 .side-control-left .side-speed,
 .side-control-right .side-speed {
-  width: 125px;
+  width: 126px;
   align-self: center;
   justify-self: center;
   transform: rotate(-90deg);
@@ -387,21 +430,21 @@ button:hover {
 
 .side-control-top,
 .side-control-bottom {
-  grid-template-columns: 110px 225px 110px;
-  gap: 18px;
+  grid-template-columns: 92px 168px 92px;
+  gap: 12px;
   align-items: center;
   justify-content: center;
 }
 
 .side-control-top .side-speed,
 .side-control-bottom .side-speed {
-  width: 205px;
+  width: 156px;
 }
 
 .side-angle {
   display: grid;
-  gap: 2px;
-  width: 96px;
+  gap: 1px;
+  width: 74px;
   justify-items: center;
   user-select: none;
   touch-action: none;
@@ -421,8 +464,8 @@ button:hover {
 }
 
 .side-angle svg {
-  width: 96px;
-  height: 50px;
+  width: 74px;
+  height: 38px;
   overflow: visible;
   cursor: grab;
 }
@@ -462,8 +505,8 @@ button:hover {
 canvas {
   grid-column: 2;
   grid-row: 2;
-  width: 820px;
-  height: 500px;
+  width: 940px;
+  height: 560px;
   display: block;
   border: 1px solid var(--panel-border);
   border-radius: 8px;
