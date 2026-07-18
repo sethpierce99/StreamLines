@@ -1,9 +1,9 @@
 import "./style.css";
 import { type Flow, type FlowKind, type Vec2, flowLabel, magnitude, velocityAtPoint } from "./flow";
 
-const CANVAS_WIDTH = 940;
+const CANVAS_WIDTH = 1060;
 const CANVAS_HEIGHT = 560;
-const WORLD_HALF_WIDTH = 6.2;
+const WORLD_HALF_WIDTH = 7;
 const WORLD_HALF_HEIGHT = 3.7;
 const GRID_SNAP = 0.25;
 const DRAG_HIT_RADIUS = 14;
@@ -22,16 +22,16 @@ const VECTOR_MAX_LENGTH_WORLD = 0.55;
 const VECTOR_SPEED_REFERENCE = 3;
 const PRESSURE_GRID_COLUMNS = 118;
 const PRESSURE_GRID_ROWS = 70;
-const PRESSURE_MIN_CP = -3;
-const PRESSURE_MAX_CP = 1;
-const DYNAMIC_PRESSURE_MAX = 4;
+const DYNAMIC_PRESSURE_VISIBLE_RANGE = 3;
+const STATIC_PRESSURE_VISIBLE_RANGE = 1;
+const PRESSURE_FIELD_ALPHA = 0.62;
 const STAGNATION_GRID_COLUMNS = 90;
 const STAGNATION_GRID_ROWS = 54;
 const STAGNATION_SPEED_THRESHOLD = 0.08;
 const STAGNATION_MIN_SEPARATION_PX = 28;
 
 type BoundarySide = "left" | "right" | "top" | "bottom";
-type PressureMode = "static" | "dynamic";
+type PressureMode = "dynamic" | "static";
 
 type SideFlow = {
   side: BoundarySide;
@@ -44,7 +44,7 @@ type ViewState = {
   showStreamlines: boolean;
   showVectors: boolean;
   showSeeds: boolean;
-  showPressureContours: boolean;
+  showPressureField: boolean;
   pressureMode: PressureMode;
   showStagnationPoints: boolean;
   selectedFlowId: string | null;
@@ -60,8 +60,8 @@ const state: ViewState = {
   showStreamlines: true,
   showVectors: true,
   showSeeds: false,
-  showPressureContours: false,
-  pressureMode: "static",
+  showPressureField: false,
+  pressureMode: "dynamic",
   showStagnationPoints: true,
   selectedFlowId: null,
   flows: [],
@@ -122,18 +122,19 @@ app.innerHTML = `
             Doublet
           </button>
           <button class="flow-add flow-add-vortex" type="button" data-kind="vortex">
-            <svg class="primitive-symbol" viewBox="0 0 40 40" aria-hidden="true">
+            <svg class="primitive-symbol vortex-button-symbol" viewBox="0 0 48 48" aria-hidden="true">
               <defs>
                 <marker id="vortex-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
                   <path d="M0 0 L5 2.5 L0 5 Z"></path>
                 </marker>
               </defs>
-              <circle class="symbol-outline" cx="20" cy="20" r="15"></circle>
-              <path marker-end="url(#vortex-arrow)" d="M27 14 A9 9 0 1 0 28 25"></path>
+              <circle class="symbol-outline" cx="24" cy="24" r="18"></circle>
+              <path marker-end="url(#vortex-arrow)" d="M24 12 A12 12 0 1 1 15.5 32.5"></path>
             </svg>
             Vortex
           </button>
         </div>
+        <p class="primitive-note">Vortex circulation Γ: positive is clockwise.</p>
       </section>
 
       <section class="control-group" aria-labelledby="flows-label">
@@ -166,10 +167,11 @@ app.innerHTML = `
         <label class="footer-field">
           <span>Pressure mode</span>
           <select id="pressure-mode">
-            <option value="static">Static Cp</option>
             <option value="dynamic">Dynamic q*</option>
+            <option value="static">Static Cp</option>
           </select>
         </label>
+        <p class="pressure-note">q* = |V|^2 / Uref^2; Cp = 1 - q*. Blue is lower pressure; red is higher pressure.</p>
         <label class="toggle">
           <input id="toggle-stagnation" type="checkbox" checked />
           Stagnation points
@@ -280,7 +282,7 @@ seedToggle.addEventListener("change", () => {
 });
 
 pressureToggle.addEventListener("change", () => {
-  state.showPressureContours = pressureToggle.checked;
+  state.showPressureField = pressureToggle.checked;
   draw();
 });
 
@@ -762,8 +764,8 @@ function draw(): void {
   context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   drawGrid();
 
-  if (state.showPressureContours) {
-    drawPressureContours();
+  if (state.showPressureField) {
+    drawPressureField();
   }
 
   if (state.showStreamlines) {
@@ -783,6 +785,7 @@ function draw(): void {
 
 function drawGrid(): void {
   context.save();
+  context.globalAlpha = PRESSURE_FIELD_ALPHA;
   context.lineWidth = 1;
   context.strokeStyle = colors.grid;
 
@@ -797,100 +800,45 @@ function drawGrid(): void {
   context.restore();
 }
 
-type ScalarField = {
-  columns: number;
-  rows: number;
-  values: number[][];
-};
+function drawPressureField(): void {
+  const flows = activeFlows();
+  const referenceSpeed = freestreamReferenceSpeed();
 
-function drawPressureContours(): void {
-  const field = buildPressureField();
+  if (referenceSpeed <= 0.001) {
+    return;
+  }
 
   context.save();
-  context.globalAlpha = 0.62;
 
-  for (let row = 0; row < field.rows; row += 1) {
-    for (let column = 0; column < field.columns; column += 1) {
-      const value =
-        (field.values[row][column] +
-          field.values[row][column + 1] +
-          field.values[row + 1][column] +
-          field.values[row + 1][column + 1]) /
-        4;
-      const x = (column / field.columns) * CANVAS_WIDTH;
-      const y = (row / field.rows) * CANVAS_HEIGHT;
-      const width = CANVAS_WIDTH / field.columns + 1;
-      const height = CANVAS_HEIGHT / field.rows + 1;
+  for (let row = 0; row < PRESSURE_GRID_ROWS; row += 1) {
+    const screenY = ((row + 0.5) / PRESSURE_GRID_ROWS) * CANVAS_HEIGHT;
 
-      context.fillStyle = pressureColor(value, state.pressureMode);
-      context.fillRect(x, y, width, height);
+    for (let column = 0; column < PRESSURE_GRID_COLUMNS; column += 1) {
+      const screenX = ((column + 0.5) / PRESSURE_GRID_COLUMNS) * CANVAS_WIDTH;
+      const sample = screenToWorld({ x: screenX, y: screenY });
+      const speed = magnitude(velocityAtPoint(sample, flows));
+      const qStar = (speed / referenceSpeed) ** 2;
+      context.fillStyle = pressureColor(qStar, state.pressureMode);
+      context.fillRect(
+        (column / PRESSURE_GRID_COLUMNS) * CANVAS_WIDTH,
+        (row / PRESSURE_GRID_ROWS) * CANVAS_HEIGHT,
+        CANVAS_WIDTH / PRESSURE_GRID_COLUMNS + 1,
+        CANVAS_HEIGHT / PRESSURE_GRID_ROWS + 1,
+      );
     }
   }
 
   context.restore();
 }
 
-function buildPressureField(): ScalarField {
-  const values: number[][] = [];
-  const flows = activeFlows();
-  const referenceSpeed = pressureReferenceSpeed(flows);
-
-  for (let row = 0; row <= PRESSURE_GRID_ROWS; row += 1) {
-    const y = -WORLD_HALF_HEIGHT + (row / PRESSURE_GRID_ROWS) * WORLD_HALF_HEIGHT * 2;
-    const valueRow: number[] = [];
-
-    for (let column = 0; column <= PRESSURE_GRID_COLUMNS; column += 1) {
-      const x = -WORLD_HALF_WIDTH + (column / PRESSURE_GRID_COLUMNS) * WORLD_HALF_WIDTH * 2;
-      const speed = magnitude(velocityAtPoint({ x, y }, flows));
-      const qStar = (speed / referenceSpeed) ** 2;
-      valueRow.push(state.pressureMode === "static" ? clamp(1 - qStar, PRESSURE_MIN_CP, PRESSURE_MAX_CP) : clamp(qStar, 0, DYNAMIC_PRESSURE_MAX));
-    }
-
-    values.push(valueRow);
-  }
-
-  return {
-    columns: PRESSURE_GRID_COLUMNS,
-    rows: PRESSURE_GRID_ROWS,
-    values,
-  };
-}
-
-function pressureReferenceSpeed(flows: Flow[]): number {
-  const boundarySpeed = state.sideFlows.reduce((speed, sideFlow) => {
-    if (!sideFlow.enabled) {
-      return speed;
-    }
-
-    return Math.max(speed, sideFlow.speed);
-  }, 0);
-  const uniformSpeed = flows.reduce((speed, flow) => {
-    if (!flow.enabled || flow.kind !== "uniform") {
-      return speed;
-    }
-
-    return Math.max(speed, Math.abs(flow.strength));
-  }, 0);
-
-  return Math.max(boundarySpeed, uniformSpeed, 1);
-}
-
-function pressureColor(value: number, mode: PressureMode): string {
-  if (mode === "dynamic") {
-    const t = clamp(value / DYNAMIC_PRESSURE_MAX, 0, 1);
-    const low = { r: 18, g: 25, b: 36 };
-    const mid = { r: 41, g: 144, b: 255 };
-    const high = { r: 255, g: 92, b: 56 };
-    const color = t < 0.5 ? mixColor(low, mid, t * 2) : mixColor(mid, high, (t - 0.5) * 2);
-
-    return `rgb(${color.r}, ${color.g}, ${color.b})`;
-  }
-
-  const t = clamp((value - PRESSURE_MIN_CP) / (PRESSURE_MAX_CP - PRESSURE_MIN_CP), 0, 1);
+function pressureColor(qStar: number, mode: PressureMode): string {
   const low = { r: 46, g: 117, b: 255 };
-  const mid = { r: 20, g: 28, b: 38 };
-  const high = { r: 255, g: 80, b: 72 };
-  const color = t < 0.5 ? mixColor(low, mid, t * 2) : mixColor(mid, high, (t - 0.5) * 2);
+  const high = { r: 255, g: 56, b: 48 };
+  const t =
+    mode === "dynamic"
+      ? clamp(qStar / (1 + DYNAMIC_PRESSURE_VISIBLE_RANGE), 0, 1)
+      : clamp((1 - qStar + DYNAMIC_PRESSURE_VISIBLE_RANGE) / (DYNAMIC_PRESSURE_VISIBLE_RANGE + STATIC_PRESSURE_VISIBLE_RANGE), 0, 1);
+  const color = mixColor(low, high, t);
 
   return `rgb(${color.r}, ${color.g}, ${color.b})`;
 }
@@ -1343,7 +1291,7 @@ function streamFunctionLabel(kind: FlowKind): string {
     case "doublet":
       return "psi = -(mu / 2pi r) sin(theta - alpha)";
     case "vortex":
-      return "psi = -(Gamma / 2pi) ln r";
+      return "psi = (Gamma / 2pi) ln r";
   }
 }
 
@@ -1429,6 +1377,20 @@ function clamp(value: number, min: number, max: number): number {
 
 function activeFlows(): Flow[] {
   return [...state.flows, ...state.sideFlows.map(sideFlowToUniformFlow)];
+}
+
+function freestreamReferenceSpeed(): number {
+  const freestreamVelocity = activeFlows()
+    .filter((flow) => flow.enabled && flow.kind === "uniform")
+    .reduce<Vec2>(
+      (sum, flow) => ({
+        x: sum.x + flow.strength * Math.cos(flow.angle),
+        y: sum.y + flow.strength * Math.sin(flow.angle),
+      }),
+      { x: 0, y: 0 },
+    );
+
+  return Math.abs(magnitude(freestreamVelocity));
 }
 
 function sideFlowToUniformFlow(sideFlow: SideFlow): Flow {

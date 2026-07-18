@@ -67,7 +67,7 @@ export function velocityFromFlow(point: Vec2, flow: Flow): Vec2 {
   }
 
   if (flow.kind === "vortex") {
-    const scale = flow.strength / (TAU * r2);
+    const scale = -flow.strength / (TAU * r2);
     return {
       x: -scale * dy,
       y: scale * dx,
@@ -101,7 +101,7 @@ export function streamFunctionFromFlow(point: Vec2, flow: Flow): number {
   }
 
   if (flow.kind === "vortex") {
-    return -(flow.strength * Math.log(radius)) / TAU;
+    return (flow.strength * Math.log(radius)) / TAU;
   }
 
   return -((flow.strength * Math.sin(theta - flow.angle)) / (TAU * radius));
